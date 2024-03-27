@@ -21,25 +21,6 @@ ADDR_DSPL:
 ADDR_KBRD:
     .word 0xffff0000
 
-GO_LEFT_KEY:
-    .word 0x61
-GO_RIGHT_KEY:
-    .word 0x64
-GO_UP_KEY:
-    .word 0x77
-GO_DOWN_KEY:
-    .word 0x73
-
-D:
-    .word 0x64
-U:
-    .word 0x75
-L:
-    .word 0x6c
-R:
-    .word 0x72
-
-
 #### Arena Size (32 * 32) * 1 byte colour code
 arena: .word 0:1024
 
@@ -64,12 +45,25 @@ xPosn:
     .byte 0x0f
 yPosn:
     .byte 0x00
+    
+#### idx of one of the recipies defined in recipies
 piece:
     .byte 0
-orientation:
-    .byte 0
+    
+#### idx of one of the colours defined in colours
 pieceColour:
     .byte 0
+    
+#### ammount of 90deg rotations from original poisition
+orientation:
+    .byte 0
+    
+#### Stores next move during pre-move checking (collision detecteion eg)
+####    0 is no move, 
+####    w,a,s,d key codes correspond to rotate, left, down, right. 
+####    ff is lock piece
+nextMove:
+   .byte 0x00
 
 ##############################################################################
 # Code
@@ -77,13 +71,55 @@ pieceColour:
 	.text
 	.globl main
 
-	# Run the Tetris game.
+
+#######################################
+######### MAIN AND GAME LOOP ##########
+#######################################
 main:
     #### Sets up borders
     jal placeBorder
     jal getNewPiece
     jal game_loop
+    
+game_loop:
+    # 1a. Handle keypress
+    addiu $sp, $sp, -4
+    sw $ra, 0($sp)
+    jal check_keyboard
+    lw $ra, 0($sp)
+    addiu $sp, $sp, 4
 
+    # 2a. Check for collisions
+    addiu $sp, $sp, -4
+    sw $ra, 0($sp)
+    jal check_collisions
+    lw $ra, 0($sp)
+    addiu $sp, $sp, 4
+
+    # 2b. Update locations (paddle, ball)
+    addiu $sp, $sp, -4
+    sw $ra, 0($sp)
+    jal updateLocations
+    lw $ra, 0($sp)
+    addiu $sp, $sp, 4
+
+    # 3. Draw the screen
+    addiu $sp, $sp, -4
+    sw $ra, 0($sp)
+    jal draw_screens
+    lw $ra, 0($sp)
+    addiu $sp, $sp, 4
+
+    # 4. Sleep
+    li 		$v0, 32
+    li 		$a0, 1
+    syscall
+
+    b game_loop
+
+###################################
+######### INITIALIZATION ##########
+###################################
 placeBorder:
     addiu $t1, $zero, 32 # y value counter
     y_loop:
@@ -149,74 +185,9 @@ placeBorder:
         exit_arena:
             jr $ra
 
-getNewPiece:
-    #### Grab a random colour idx and put it in $t1
-    li $v0 42
-    li $a0 0
-    li $a1 6
-    syscall
-    add $t1 $a0 $zero
-
-    #### Grab a random piece code and put it in $t2
-    li $v0 42
-    li $a0 0
-    li $a1 7
-    syscall
-    add $t2 $a0 $zero
-
-    la $t3 pieceColour
-    la $t4 piece
-    la $t5 xPosn
-    la $t6 yPosn
-
-    sb $t1 0($t3)
-    sb $t2 0($t4)
-
-    li $t3 0x0f
-    li $t4 0
-
-    sb $t3 0($t5)
-    sb $t4 0($t6)
-
-    jr $ra
-
-game_loop:
-    # 1a. Handle keypress
-    addiu $sp, $sp, -4
-    sw $ra, 0($sp)
-    jal check_keyboard
-    lw $ra, 0($sp)
-    addiu $sp, $sp, 4
-
-    # 2a. Check for collisions
-    addiu $sp, $sp, -4
-    sw $ra, 0($sp)
-    jal check_collisions
-    lw $ra, 0($sp)
-    addiu $sp, $sp, 4
-
-    # 2b. Update locations (paddle, ball)
-    addiu $sp, $sp, -4
-    sw $ra, 0($sp)
-    jal updateLocations
-    lw $ra, 0($sp)
-    addiu $sp, $sp, 4
-
-    # 3. Draw the screen
-    addiu $sp, $sp, -4
-    sw $ra, 0($sp)
-    jal draw_screens
-    lw $ra, 0($sp)
-    addiu $sp, $sp, 4
-
-    # 4. Sleep
-    li 		$v0, 32
-    li 		$a0, 1
-    syscall
-
-    b game_loop
-
-
+#####################################
+######### Handle Keyboard  ##########
+#####################################
 check_keyboard:
     lw $t0, ADDR_KBRD               # $t0 = base address for keyboard
     lw $t1, 0($t0)                  # Load first word from keyboard
@@ -292,34 +263,18 @@ handle_key:
     addiu $t3, $t3, 1
     sb $t3, 0($t2)
     jr $ra
-
-
-
-draw_screens:
-    li $t0 1024
-    la $t1 arena
-    lw $t2 ADDR_DSPL
-    drawPixel:
-        addiu $t0 $t0 -1
-        
-        sll $t3 $t0 2 # Gives offset 
-        
-        addu $t4 $t3 $t1 # Add offset to arena address
-        lw $t4 0($t4) # Load arena value
-        
-        addu $t5 $t3 $t2 # Add offset to bitmap
-        sw $t4 0($t5) # Store display value in bitmap
-        
-        beq $t0 $zero exitDraw
-        b drawPixel
-        
-    exitDraw:
-    jr $ra
+    
+####################################
+######### Check Collisions  ########
+####################################
 
 check_collisions:
     jr $ra
     
     
+######################################
+######### Update positions  ##########
+######################################
 updateLocations:
     addiu $sp $sp -4
     sw $ra 0($sp)
@@ -511,6 +466,70 @@ placePiece:
 
     placeLoopexit:
     jr $ra
+    
+    
+getNewPiece:
+    #### Grab a random colour idx and put it in $t1
+    li $v0 42
+    li $a0 0
+    li $a1 6
+    syscall
+    add $t1 $a0 $zero
+
+    #### Grab a random piece code and put it in $t2
+    li $v0 42
+    li $a0 0
+    li $a1 7
+    syscall
+    add $t2 $a0 $zero
+
+    la $t3 pieceColour
+    la $t4 piece
+    la $t5 xPosn
+    la $t6 yPosn
+
+    sb $t1 0($t3)
+    sb $t2 0($t4)
+
+    li $t3 0x0f
+    li $t4 0
+
+    sb $t3 0($t5)
+    sb $t4 0($t6)
+
+    jr $ra
+
+
+
+##################################
+######### Draw Screens  ##########
+##################################
+draw_screens:
+    li $t0 1024
+    la $t1 arena
+    lw $t2 ADDR_DSPL
+    drawPixel:
+        addiu $t0 $t0 -1
+        
+        sll $t3 $t0 2 # Gives offset 
+        
+        addu $t4 $t3 $t1 # Add offset to arena address
+        lw $t4 0($t4) # Load arena value
+        
+        addu $t5 $t3 $t2 # Add offset to bitmap
+        sw $t4 0($t5) # Store display value in bitmap
+        
+        beq $t0 $zero exitDraw
+        b drawPixel
+        
+    exitDraw:
+    jr $ra
+
+
+    
+    
+
+
 
 END:
 	li $v0, 10
