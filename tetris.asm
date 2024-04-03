@@ -75,7 +75,14 @@ loopNum:
     .byte 0
     
 gravitySpeed:
-    .byte 128
+    .byte 1
+    
+#### Maximum of four rows to delete
+rowsToDelete:
+    .byte 0:4
+    
+doRowDeletin:
+    .byte 0
 
 ##############################################################################
 # Code
@@ -116,15 +123,55 @@ game_loop:
     jal updateLocations
     lw $ra, 0($sp)
     addiu $sp, $sp, 4
+    
+    #### handle row deletion if neccesary
+    la $t0 lockBlock
+    lbu $t1 0($t0)
+    beq $t1 0 skipRowStuff
 
-    # 3. Draw the screen
+    addiu $sp $sp -4
+    sw $ra 0($sp)
+    jal storeTemporaryRegisters
+    jal checkRowsFull
+    jal deleteRows
+    jal grabTemporaryRegisters
+    lw $ra, 0($sp)
+    addiu $sp, $sp, 4
+    
+    #### Unlock the next block
+    la $t6 lockBlock
+    li $t7 0
+    sb $t7 0($t6)
+    
+    #### Generate all the values for the new piece
+    #### Will be placed on next loop
+    
+    addiu $sp $sp -4
+    sw $ra 0($sp)
+    
+    jal storeTemporaryRegisters
+    jal getNewPiece
+    jal grabTemporaryRegisters
+    
+    lw $ra 0($sp)
+    addiu $sp $sp 4
+    
+    
+    
+    skipRowStuff:
+
+
+    # 4. Draw the screen
     addiu $sp, $sp, -4
     sw $ra, 0($sp)
     jal draw_screens
     lw $ra, 0($sp)
     addiu $sp, $sp, 4
 
-    # 4. Sleep
+
+
+
+    # 5. Sleep
     li 		$v0, 32
     li 		$a0, 16
     syscall
@@ -148,6 +195,7 @@ placeBorder:
             subu $t3 $t2 $t3
             bgtz $t3, border # Check if x is > 31
             beq $t1 31 border # Check if y is 31
+            beq $t1 30 border
             beq $t2, 0, border # Check if x is zero
 
             ### BLCK SQUARE START
@@ -310,11 +358,6 @@ check_collisions:
     jal checkUnder
     la $t9 lockBlock
     sb $v0 0($t9)
-    
-    #### If block is locked, check for completed rows
-    beq $v0 0 dontCheckRows
-    jal checkRows
-    dontCheckRows:
     b checksComplete
     
     blockMove:
@@ -388,73 +431,6 @@ checkConflict:
     no_conflicts:
     li $v0 0
     jr $ra
-    
-    
-checkRows:
-    li $v0 0
-    la $t0 arena
-    addu $t1 $zero $zero
-        
-    checkRow:
-        beq $t1 20 allRowsChecked
-        
-        #### Grab block position off stack
-        addu $t2 $t1 $sp
-        lw $t2 0($t2)
-        
-        #### Right shift 7 then left shift 5 times to get only y value * 32
-        srl $t2 $t2 7
-        sll $t2 $t2 5
-        
-        addu $t3 $zero $zero
-        lbu $t4 gameWidth
-        
-        checkSquare:
-            #### Exit if all squares in row have been checked
-            beq $t3 $t4 rowFull 
-            #### Increment x
-            addiu $t3 $t3 1
-            
-            # Calculate 4*(y*32 + x) to get offset
-            addu $t5 $t3 $t2
-            sll $t5 $t5 2
-            addu $t5 $t5 $t0 # Grab address
-            
-            # Check if the square is black, if not check if this piece will fill the spot
-            lw $t6 0($t5)
-            beq $t6 0 rowNotFull
-            
-            #### Go through check to see if the new piece position will fill this spot
-            addu $t7 $zero $zero
-            checkPiece:
-                #### If this is true, the square isn't filled by the piece
-                beq $t7 20 rowNotFull
-                
-                #### Grab block position off stack
-                addu $t2 $t7 $sp
-                lw $t2 0($t2)
-                
-                #### Convert to address in arena
-                addu $t2 $t2 $t0
-                
-                #### Check if this piece square $t2 will fill row spot $t5
-                beq $t2 $t5 checkSquare
-                
-                #### Increment stack pointer
-                addiu $t7 $t7 4
-
-            b checkSquare
-            
-        rowNotFull:
-        addiu $t1 $t1 4
-        b checkRow
-        
-        rowFull:
-        #### TODO add rows to delete
-        li $v0 1
-        
-        allRowsChecked:
-        jr $ra
     
 getPieceLocations:
     lbu $t4, 0($sp)          # Pop x posn off stack and put in $t1
@@ -621,27 +597,64 @@ updateLocations:
     lw $ra 0($sp)
     addiu $sp $sp 4
     
-    lbu $t6 lockBlock
-    beq $t6, 0x1, lockTheBlock                # Lock the piece and generate a new one
-    jr $ra 
-     
-    lockTheBlock:
-    #### Generate all the values for the new piece
-    #### Will be placed on next loop
-    addiu $sp $sp -4
-    sw $ra 0($sp)
-    jal storeTemporaryRegisters
-    jal getNewPiece
-    jal grabTemporaryRegisters
-    lw $ra 0($sp)
-    addiu $sp $sp 4
-    
-    #### Unlock the next block
-    la $t6 lockBlock
-    li $t7 0
-    sb $t7 0($t6)
-    
     jr $ra
+    
+checkRowsFull:
+    li $v0 0
+    la $t0 arena
+    addu $t1 $zero $zero
+
+    #### Signal row needs to be deleted
+    la $t7 doRowDeletin
+    # Location of the rows to be deleted
+    la $t9 rowsToDelete
+        
+    checkRow:
+        beq $t1 31 allRowsChecked
+        
+        #### Left shift 5 times to get y value * 32
+        sll $t2 $t1 5
+        
+        addu $t3 $zero $zero
+        lbu $t4 gameWidth
+        
+        checkSquare:
+            #### Exit if all squares in row have been checked
+            beq $t3 $t4 rowFull 
+            #### Increment x
+            addiu $t3 $t3 1
+            
+            # Calculate 4*(y*32 + x) to get offset
+            addu $t5 $t2 $t3
+            sll $t5 $t5 2
+            addu $t5 $t5 $t0 # Grab address
+            
+            # Check if the square is black, if it is then the row isn't full
+            # if it isn't then check if the next square is black
+            lw $t6 0($t5)
+            beq $t6 0 rowNotFull
+            
+            b checkSquare
+            
+        rowNotFull:
+        addiu $t1 $t1 1
+        b checkRow
+        
+        rowFull:
+        #### Signal rows need to be deleted
+        li $t8 1
+        sb $t8 0($t7)
+        
+        #### Store the y value in the deleted array and incrment address
+        sb $t1 0($t9)
+        addiu $t9 $t9 1
+        
+        # Check the next row
+        addiu $t1 $t1 1
+        b checkRow
+        
+        allRowsChecked:
+        jr $ra
     
     
 #### Get a random piece, colour and store at start position
@@ -693,6 +706,110 @@ getNewPiece:
     sb $t9 0($t8)
 
     jr $ra
+    
+#########################################
+########### Handle row deletion #########
+#########################################
+deleteRows: 
+    la $t0 doRowDeletin
+    la $t1 rowsToDelete
+    
+    lbu $t2 0($t0)
+    
+    beq $t2 0 doneDeleteRows
+    la $t8 arena
+    
+    #### Loop through until row is 0 or fourth has been reached
+    li $t2 0 
+    deleteRow:
+        #### If all four rows have been checked, we are done
+        beq $t2 4 doneDeletin
+        
+        #### Grab row to delete (rows to delete + $t2)
+        addu $t9 $t2 $t1
+        lbu $t3 0($t9)
+        
+        #### If branch to delete is zero this means it's done
+        beq $t3 0 doneDeletin
+        
+        #### Move all rows from $t3 -1 to zero
+        addiu $t3 $t3 -1
+        moveRow:
+            #### Start with $t4 on the first square
+            addiu $t4 $zero 0
+
+            moveSquare: 
+                addiu $t4 $t4 1
+                ### Get colour at ($t4, $t3)
+                sll $t5 $t3 5
+                addu $t5 $t5 $t4
+                sll $t5 $t5 2
+                #### Get address for colour
+                addu $t5 $t5 $t8
+            
+                lw $t6 0($t5)
+                
+                addiu $s0 $zero 0
+                checkColour: 
+                    beq $s0 40 noColour
+                    la $s1 colours 
+                    addu $s1 $s1 $s0
+                    lw $s1 0($s1)
+                    addiu $s0 $s0 4
+                    bne $s1 $t6 checkColour
+                    
+                noColour:
+                srl $s0 $s0 2
+                addu $t6 $zero $s0
+                            
+                ### Paint ($t4, $t3 + 1) with same colour $t6
+                addiu $t5 $t3 1
+                
+                addiu $sp, $sp, -4
+                sw $ra, 0($sp)
+                jal storeTemporaryRegisters
+            
+                addiu $sp $sp -12
+                sw $t6 8($sp) # Pass in colour
+                sw $t5 4($sp) # Pass in y
+                sw $t4 0($sp) # Pass in x
+            
+                jal placeSquare
+            
+                #### Move params off stack
+                addiu $sp $sp 12
+            
+                jal grabTemporaryRegisters
+                lw $ra, 0($sp)
+                addiu $sp, $sp, 4
+                
+                lbu $t5 gameWidth
+                bne $t4 $t5 moveSquare
+            
+            ### Go to prev row
+            addiu $t3 $t3 -1
+            #### Keep going if all previous rows haven't been moved
+            bne $t3 0 moveRow
+            
+            #### Oherwise repeat for the next deletion row
+            addiu $t2 $t2 1
+            b deleteRow
+            
+    
+    doneDeletin: 
+    la $t0 doRowDeletin
+    la $t1 rowsToDelete
+    #### indicate rows have been deleted
+    li $t2 0
+    sb $t2 0($t0)
+    sb $t2 0($t1)
+    sb $t2 1($t1)
+    sb $t2 2($t1)
+    sb $t2 3($t1)
+    
+    doneDeleteRows:
+    jr $ra
+
 
 ##################################
 ######### Draw Screens  ##########
