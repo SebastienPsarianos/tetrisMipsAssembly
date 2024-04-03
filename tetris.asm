@@ -32,7 +32,9 @@ colours:
 recipies:
     .byte 0b10101000, 0b10101101, 0b10100111,  0b10111000, 0b10011000, 0b10110110,  0b01101100
     
-
+gameWidth:
+    .byte 16
+          
 newline: .asciiz "\n"
 ##############################################################################
 # Mutable Data
@@ -69,6 +71,11 @@ nextMove:
 lockBlock:
     .byte 0
     
+loopNum: 
+    .byte 0
+    
+gravitySpeed:
+    .byte 128
 
 ##############################################################################
 # Code
@@ -119,7 +126,7 @@ game_loop:
 
     # 4. Sleep
     li 		$v0, 32
-    li 		$a0, 1
+    li 		$a0, 16
     syscall
 
     b game_loop
@@ -130,21 +137,20 @@ game_loop:
 placeBorder:
     addiu $t1, $zero, 32 # y value counter
     y_loop:
-        beq $t1 $zero exit_arena # Return to y loop when done
+        beq $t1 $zero exitBorder # Return to y loop when done
         addiu $t1 $t1 -1 # Decrement y
         addiu $t2, $zero, 32 # x value counter
         x_loop:
-        
             beq $t2 $zero y_loop # Return to y loop when done
             addiu $t2 $t2 -1 # Decrement x
-                
-            addi $t3 $t2 -16
-            bgtz $t3, border # Check if x is 31
+            
+            lbu $t3 gameWidth
+            subu $t3 $t2 $t3
+            bgtz $t3, border # Check if x is > 31
             beq $t1 31 border # Check if y is 31
             beq $t2, 0, border # Check if x is zero
 
             ### BLCK SQUARE START
-            
             addiu $sp, $sp, -4
             sw $ra, 0($sp)
             jal storeTemporaryRegisters
@@ -190,7 +196,7 @@ placeBorder:
                 addiu $sp, $sp, 4
 
                 b x_loop
-        exit_arena:
+        exitBorder:
             jr $ra
 
 #####################################
@@ -201,17 +207,50 @@ placeBorder:
 check_keyboard:
     lw $t0 ADDR_KBRD               # $t0 = base address for keyboard
     la $t1 nextMove
-    lw $t2, 0($t0)                  # Load first word from keyboard into t2
-    bne $t2, 1, no_key              # Put 
+
+    #### Grab loopNum and gravity speed
+    la $t2 loopNum
+    lbu $t3 gravitySpeed
+    lbu $t4 0($t2)
     
-    lw $t3, 4($t0)                  # Store second word in nextMove
-    sb $t3 0($t1)                 
-    jr $ra
+    #### Increment gravity value and then store
+    beq $t4 $t3 resetLoop
+    addiu $t4 $t4 1
+    sb $t4 0($t2)
+    b gravityCheck
+    resetLoop:
+    addu $t4 $zero $zero
+    sb $t4 0($t2)
+    
+    #### Check if gravity should push block this loop
+    gravityCheck:
+    lw $t2, 0($t0)                  # Load first word from keyboard into t2
+    beq $t4 $t3 gravity
+    bne $t2, 1, no_key
+
+    lw $t3, 4($t0)                  # Grab second word
+    
+    #### Check for valid move
+    beq $t3, 0x61, validCommand                 
+    beq $t3, 0x64, validCommand            
+    beq $t3, 0x77, validCommand           
+    beq $t3, 0x73, validCommand     
+    beq $t3, 0x71, END                      # Exit the game      
     
     no_key:
     addu $t3 $zero $zero
     sb $t3 0($t1)
     jr $ra
+    
+    gravity:
+    li $t3, 0x73                  # Make next move down
+    sb $t3 0($t1)
+    jr $ra
+    
+    validCommand:
+    sb $t3 0($t1)                 
+    jr $ra
+    
 
 ####################################
 ######### Check Collisions  ########
@@ -260,7 +299,6 @@ check_collisions:
     sb $t3 4($sp) # Pass in yPosn
     sb $t4 0($sp) # Pass in xPosn
     
-    
     ####  Block positions on stack (-20)
     jal getPieceLocations
 
@@ -272,6 +310,11 @@ check_collisions:
     jal checkUnder
     la $t9 lockBlock
     sb $v0 0($t9)
+    
+    #### If block is locked, check for completed rows
+    beq $v0 0 dontCheckRows
+    jal checkRows
+    dontCheckRows:
     b checksComplete
     
     blockMove:
@@ -291,7 +334,6 @@ check_collisions:
 checkUnder:
     la $t0 arena
     addu $t1 $zero $zero
-    b checkBlockUnder
         
     checkBlockUnder:
         beq $t1 20 nothing_under
@@ -309,6 +351,8 @@ checkUnder:
         lw $t2 0($t2)
         addi $t1 $t1 4
         
+        #### Grab only colour code
+        andi $t2 $t2 0x00ffffff
         beq $t2 0 checkBlockUnder
         li $v0 1
         
@@ -335,6 +379,8 @@ checkConflict:
 
         addi $t1 $t1 4
         
+        #### Grab only colour code
+        andi $t2 $t2 0x00ffffff
         beq $t2 0 check_block_conflict
         li $v0 1
         jr $ra
@@ -343,6 +389,72 @@ checkConflict:
     li $v0 0
     jr $ra
     
+    
+checkRows:
+    li $v0 0
+    la $t0 arena
+    addu $t1 $zero $zero
+        
+    checkRow:
+        beq $t1 20 allRowsChecked
+        
+        #### Grab block position off stack
+        addu $t2 $t1 $sp
+        lw $t2 0($t2)
+        
+        #### Right shift 7 then left shift 5 times to get only y value * 32
+        srl $t2 $t2 7
+        sll $t2 $t2 5
+        
+        addu $t3 $zero $zero
+        lbu $t4 gameWidth
+        
+        checkSquare:
+            #### Exit if all squares in row have been checked
+            beq $t3 $t4 rowFull 
+            #### Increment x
+            addiu $t3 $t3 1
+            
+            # Calculate 4*(y*32 + x) to get offset
+            addu $t5 $t3 $t2
+            sll $t5 $t5 2
+            addu $t5 $t5 $t0 # Grab address
+            
+            # Check if the square is black, if not check if this piece will fill the spot
+            lw $t6 0($t5)
+            beq $t6 0 rowNotFull
+            
+            #### Go through check to see if the new piece position will fill this spot
+            addu $t7 $zero $zero
+            checkPiece:
+                #### If this is true, the square isn't filled by the piece
+                beq $t7 20 rowNotFull
+                
+                #### Grab block position off stack
+                addu $t2 $t7 $sp
+                lw $t2 0($t2)
+                
+                #### Convert to address in arena
+                addu $t2 $t2 $t0
+                
+                #### Check if this piece square $t2 will fill row spot $t5
+                beq $t2 $t5 checkSquare
+                
+                #### Increment stack pointer
+                addiu $t7 $t7 4
+
+            b checkSquare
+            
+        rowNotFull:
+        addiu $t1 $t1 4
+        b checkRow
+        
+        rowFull:
+        #### TODO add rows to delete
+        li $v0 1
+        
+        allRowsChecked:
+        jr $ra
     
 getPieceLocations:
     lbu $t4, 0($sp)          # Pop x posn off stack and put in $t1
@@ -449,7 +561,7 @@ getPieceLocations:
 ######### Update positions  ##########
 ######################################
 updateLocations:
-    #### Change orientation or position based on keyg
+    #### Change orientation or position based on key
     lbu $t0 orientation
     lbu $t1 piece
     lbu $t2 pieceColour
@@ -462,7 +574,6 @@ updateLocations:
     beq $t5, 0x64, move_right               # Move the piece right 
     beq $t5, 0x77, rotate                   # Rotate the piece 
     beq $t5, 0x73, move_down                # Move the piece down
-    beq $t5, 0x71, END                      # Exit the game
     
     #### Update x and store new position in memory
     move_left: 
@@ -516,7 +627,7 @@ updateLocations:
      
     lockTheBlock:
     #### Generate all the values for the new piece
-    #### Will be placed o+n next loop
+    #### Will be placed on next loop
     addiu $sp $sp -4
     sw $ra 0($sp)
     jal storeTemporaryRegisters
@@ -549,20 +660,37 @@ getNewPiece:
     syscall
     add $t2 $a0 $zero
     
-    la $t3 pieceColour
-    la $t4 piece
-    la $t5 xPosn
-    la $t6 yPosn
+    #### Grab a random x position and put it in $t3
+    li $v0 42
+    li $a0 0
+    li $a1 0xb
+    syscall
+    addi $t3 $a0 2
+    
+    la $t4 pieceColour
+    la $t5 piece
+    la $t6 xPosn
+    la $t7 yPosn
+    la $t8 orientation
+    
+    #### TODO REMOVE THIS ####
+    li $t2 0
+    #### END TODO ####
 
-    sb $t1 0($t3)
-    sb $t2 0($t4)
-
-    #### Initial position at center of screen 
-    li $t3 0x05
-    li $t4 0x01
-
-    sb $t3 0($t5)
-    sb $t4 0($t6)
+    #Random colour
+    sb $t1 0($t4)
+    # random piece
+    sb $t2 0($t5)
+    # random x posn
+    sb $t3 0($t6)
+    
+    #### Initial position at y=0
+    li $t5 0x01
+    sb $t5 0($t7)
+    
+    ### Initial orientation 0
+    li $t5 0
+    sb $t9 0($t8)
 
     jr $ra
 
@@ -579,11 +707,21 @@ draw_screens:
         sll $t3 $t0 2 # Gives offset 
         
         addu $t4 $t3 $t1 # Add offset to arena address
-        lw $t4 0($t4) # Load arena value
         
-        addu $t5 $t3 $t2 # Add offset to bitmap
-        sw $t4 0($t5) # Store display value in bitmap
+        lw $t5 0($t4) # Load arena value
         
+        # #### Check if block needs to be updated
+        andi $t6 $t5 0x11000000
+        bne $t6 0x11000000 dontDraw
+        
+        # #### Remove update requirement by getting rid of 11
+        addiu $t5 $t5 -0x11000000
+        sw $t5 0($t4)
+        
+        addu $t6 $t3 $t2 # Add offset to bitmap
+        sw $t5 0($t6) # Store display value in bitmap
+        
+        dontDraw:
         beq $t0 $zero exitDraw
         b drawPixel
         
@@ -620,7 +758,9 @@ placeSquare:
     add $t5 $t5 $t3
     # Load colour code from memory
     lw $t5, 0($t5)
-    # Paint the current position with appropriate colour
+    # Paint the current position with appropriate colour plus 
+    # ff at the start to indicate it needs to be repainted
+    addi $t5 $t5 0x11000000
     sw $t5, 0($t4)
 
     jr $ra
@@ -778,6 +918,9 @@ placeSquareFromRecipe:
         jr $ra
         
     
+#################################
+######### Stack Utils  ##########
+#################################
 storeTemporaryRegisters: 
 
     addiu $sp, $sp, -40
@@ -793,6 +936,8 @@ storeTemporaryRegisters:
     sw $t9 0($sp) # Store $t9
         
     jr $ra
+    
+    
 grabTemporaryRegisters: 
 
     lw $t9, 0($sp) # Grab $t9
@@ -813,4 +958,3 @@ grabTemporaryRegisters:
 END:
 	li $v0, 10
 	syscall
-
