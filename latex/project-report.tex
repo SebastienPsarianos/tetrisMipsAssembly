@@ -1,0 +1,54 @@
+\documentclass{article}
+
+%% Page Margins %%
+\usepackage{geometry}
+\geometry{
+    top = 0.75in,
+    bottom = 0.75in,
+    right = 0.75in,
+    left = 0.75in,
+}
+
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{parskip}
+
+\title{Assembly Project: Tetris}
+
+% TODO: Enter your name
+\author{Sebastien Psarianos}
+
+\begin{document}
+\maketitle
+
+\section{Instruction and Summary}
+
+\begin{enumerate}
+
+    \item Which milestones were implemented?
+    Milestones 1 and 2 are finished
+
+    \item How to view the game:
+
+    \begin{enumerate}
+
+    \item 8 pixel unit height and width
+    \item 256 pixel display height and width
+    \item Base address 0x10008000
+
+
+    \end{enumerate}
+
+
+\item Game Summary:
+I have managed to implement rotation and translation in my game so far. All shapes are implemented and every time a new shape is added, it will pick a random shape and random colour. I have pretty much figured out collisions, but I am having issues so I wasn't able to present that. Tetromino data is stored in terms of 1 byte recipies where every two bits represents a direction to draw the tetromino in from its origin. These direction values were chosen such that when you add one to it without carry it will rotate the position by 90 deg.
+\begin{itemize}
+\item
+\item
+\end{itemize}
+
+
+\end{enumerate}
+
+
+\end{document}
